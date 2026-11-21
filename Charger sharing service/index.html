@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <title>EV SMART CHARGE • Charger sharing service</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
     html, body {
       margin: 0;
@@ -12,6 +13,7 @@
       height: 100%;
       overflow: hidden;
       background: #f4f7fb;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     #gas-app-frame {
       position: fixed;
@@ -19,6 +21,83 @@
       width: 100vw;
       height: 100dvh;
       border: 0;
+      z-index: 1;
+    }
+    #qr-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: #020617;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      box-sizing: border-box;
+      color: #ffffff;
+    }
+    #qr-overlay.open {
+      display: flex;
+    }
+    .qr-top-bar {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .qr-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+    .qr-close-btn {
+      background: #ef4444;
+      color: #ffffff;
+      border: 0;
+      border-radius: 12px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .qr-video-box {
+      position: relative;
+      width: 100%;
+      max-width: 420px;
+      aspect-ratio: 3 / 4;
+      max-height: 68dvh;
+      background: #000000;
+      border-radius: 20px;
+      overflow: hidden;
+      border: 2px solid #0ea5e9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #qr-overlay-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .qr-reticle {
+      position: absolute;
+      width: 220px;
+      height: 220px;
+      border: 3px solid #38bdf8;
+      border-radius: 18px;
+      box-shadow: 0 0 0 9999px rgba(2, 6, 23, 0.45);
+      pointer-events: none;
+    }
+    .qr-status-bar {
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+      font-size: 13px;
+      color: #e0f2fe;
+      padding: 10px 12px;
+      background: rgba(15, 23, 42, 0.85);
+      border-radius: 14px;
     }
   </style>
 </head>
@@ -31,17 +110,147 @@
     frameborder="0"
   ></iframe>
 
+  <!-- กล้องสแกน QR Code สดระดับ Top-Level HTTPS (ไม่ติดสิทธิ์ iframe ของ Google Apps Script) -->
+  <div id="qr-overlay">
+    <div class="qr-top-bar">
+      <div class="qr-title">สแกน QR Code จุดชาร์จ EV</div>
+      <button type="button" class="qr-close-btn" onclick="closeTopQrScanner()">ปิดกล้อง</button>
+    </div>
+
+    <div class="qr-video-box">
+      <video id="qr-overlay-video" playsinline muted autoplay></video>
+      <div class="qr-reticle"></div>
+    </div>
+
+    <div id="qr-overlay-status" class="qr-status-bar">กำลังเปิดกล้องหลัง... กรุณาส่องไปที่ QR Code</div>
+  </div>
+
   <script>
-    (function() {
-      var baseGasUrl = 'https://script.google.com/macros/s/AKfycbxyZEQKGYu_kYg0ksP6hKk3jrNXvOHnGzC2eDx6wOie9DlW5qyvlC-gH171eiICq_GzXA/exec';
+    var BASE_GAS_URL = 'https://script.google.com/macros/s/AKfycbxyZEQKGYu_kYg0ksP6hKk3jrNXvOHnGzC2eDx6wOie9DlW5qyvlC-gH171eiICq_GzXA/exec';
+    var qrStream = null;
+    var qrRaf = null;
+    var qrRunning = false;
+
+    (function initGasFrameUrl() {
       var qs = window.location.search || '';
-      if (qs && qs.length > 1) {
-        var frame = document.getElementById('gas-app-frame');
-        if (frame) {
-          frame.src = baseGasUrl + qs;
-        }
+      var frame = document.getElementById('gas-app-frame');
+      if (frame && qs && qs.length > 1) {
+        frame.src = BASE_GAS_URL + qs;
+      }
+      var params = new URLSearchParams(qs);
+      if (params.get('openScan') === '1') {
+        setTimeout(openTopQrScanner, 300);
       }
     })();
+
+    function setOverlayStatus(msg) {
+      var el = document.getElementById('qr-overlay-status');
+      if (el) el.textContent = msg;
+    }
+
+    function openTopQrScanner() {
+      var overlay = document.getElementById('qr-overlay');
+      var video = document.getElementById('qr-overlay-video');
+      if (!overlay || !video) return;
+      overlay.classList.add('open');
+      setOverlayStatus('กำลังเปิดกล้องหลัง... กรุณากดอนุญาตหากระบบถามสิทธิ์กล้อง');
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setOverlayStatus('เบราว์เซอร์นี้ไม่รองรับการเปิดกล้องสด กรุณาเปิดผ่าน Chrome หรือ Safari');
+        return;
+      }
+
+      var onStreamReady = function(stream) {
+        qrStream = stream;
+        qrRunning = true;
+        video.srcObject = stream;
+        video.setAttribute('playsinline', 'true');
+        video.muted = true;
+        var p = video.play();
+        if (p && typeof p.catch === 'function') p.catch(function() {});
+        setOverlayStatus('ส่องกล้องไปที่ QR Code ประจำจุดชาร์จ EV');
+
+        var canvas = document.createElement('canvas');
+        var ctx = canvas.getContext('2d', { willReadFrequently: true });
+        var lastTick = 0;
+
+        var scanFrame = function(ts) {
+          if (!qrRunning) return;
+          if (video.readyState >= 2 && video.videoWidth > 0 && (!lastTick || ts - lastTick > 140)) {
+            lastTick = ts;
+            var vw = video.videoWidth;
+            var vh = video.videoHeight;
+            var tw = Math.min(vw, 720);
+            var th = Math.round((vh * tw) / vw);
+            canvas.width = tw;
+            canvas.height = th;
+            ctx.drawImage(video, 0, 0, tw, th);
+
+            if (typeof jsQR !== 'undefined') {
+              var imgData = ctx.getImageData(0, 0, tw, th);
+              var code = jsQR(imgData.data, tw, th, { inversionAttempts: 'attemptBoth' });
+              if (code && code.data) {
+                var resultText = code.data;
+                closeTopQrScanner();
+                var frame = document.getElementById('gas-app-frame');
+                if (frame && frame.contentWindow) {
+                  frame.contentWindow.postMessage({ type: 'EV_QR_SCANNED', code: resultText }, '*');
+                }
+                return;
+              }
+            }
+          }
+          qrRaf = requestAnimationFrame(scanFrame);
+        };
+        qrRaf = requestAnimationFrame(scanFrame);
+      };
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      }).then(onStreamReady).catch(function() {
+        navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false
+        }).then(onStreamReady).catch(function(err) {
+          setOverlayStatus('ไม่สามารถเข้าถึงกล้องได้ (' + (err && err.name ? err.name : 'Permission denied') + ') กรุณาอนุญาตสิทธิ์กล้องใน Chrome/Safari');
+        });
+      });
+    }
+
+    function closeTopQrScanner() {
+      qrRunning = false;
+      if (qrRaf) {
+        cancelAnimationFrame(qrRaf);
+        qrRaf = null;
+      }
+      if (qrStream) {
+        try {
+          var tracks = qrStream.getTracks();
+          for (var i = 0; i < tracks.length; i++) tracks[i].stop();
+        } catch (e) {}
+        qrStream = null;
+      }
+      var video = document.getElementById('qr-overlay-video');
+      if (video) video.srcObject = null;
+      var overlay = document.getElementById('qr-overlay');
+      if (overlay) overlay.classList.remove('open');
+    }
+
+    // รับคำสั่งเปิดกล้องจาก Google Apps Script iframe
+    window.addEventListener('message', function(ev) {
+      if (!ev || !ev.data) return;
+      if (ev.data.type === 'OPEN_EV_QR_SCANNER') {
+        try {
+          if (ev.source) {
+            ev.source.postMessage({ type: 'EV_QR_SCANNER_ACK' }, '*');
+          }
+        } catch (e) {}
+        openTopQrScanner();
+      } else if (ev.data.type === 'CLOSE_EV_QR_SCANNER') {
+        closeTopQrScanner();
+      }
+    });
   </script>
 </body>
 </html>

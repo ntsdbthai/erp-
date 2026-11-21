@@ -1,11 +1,47 @@
 <!doctype html>
 <html lang="th">
 <head>
-<meta charset="UTF-8"
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Charger sharing service</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>EV SMART CHARGE • Charger sharing service</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #f4f7fb;
+    }
+    #gas-app-frame {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100dvh;
+      border: 0;
+    }
+  </style>
 </head>
 <body>
-    <iframe  scrolling="no"  src="https://script.google.com/macros/s/AKfycbxyZEQKGYu_kYg0ksP6hKk3jrNXvOHnGzC2eDx6wOie9DlW5qyvlC-gH171eiICq_GzXA/exec" frameborder="0" style="height: 100vh;width: 100vw;position:fixed;"></iframe>
+  <iframe
+    id="gas-app-frame"
+    src="https://script.google.com/macros/s/AKfycbxyZEQKGYu_kYg0ksP6hKk3jrNXvOHnGzC2eDx6wOie9DlW5qyvlC-gH171eiICq_GzXA/exec"
+    allow="camera *; microphone *; geolocation *; clipboard-write *"
+    allowfullscreen
+    frameborder="0"
+  ></iframe>
+
+  <script>
+    (function() {
+      var baseGasUrl = 'https://script.google.com/macros/s/AKfycbxyZEQKGYu_kYg0ksP6hKk3jrNXvOHnGzC2eDx6wOie9DlW5qyvlC-gH171eiICq_GzXA/exec';
+      var qs = window.location.search || '';
+      if (qs && qs.length > 1) {
+        var frame = document.getElementById('gas-app-frame');
+        if (frame) {
+          frame.src = baseGasUrl + qs;
+        }
+      }
+    })();
+  </script>
 </body>
 </html>
